@@ -4,8 +4,6 @@ Predicting which telecom customers are about to cancel their service ("churn"), 
 
 The project now includes an interactive **Streamlit app** for portfolio exploration, individual and batch scoring, and model evaluation. Upload a labeled CSV to train; no customer dataset or serialized model is bundled.
 
-> 📺 **Video walkthrough:** https://www.youtube.com/watch?v=IUOKT-ZLd1c
-
 ---
 
 ## 📊 The Dataset
