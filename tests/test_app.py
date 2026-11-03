@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from app import FEATURE_COLUMNS, calculate_metrics, prepare_training_data, train_model
+from src.train_model import build_artifact
 
 
 def sample_customers(count: int = 100) -> pd.DataFrame:
@@ -64,6 +65,17 @@ class ChurnAppTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Contract"):
             prepare_training_data(frame)
+
+    def test_saved_artifact_scores_customers_without_training_rows(self) -> None:
+        artifact = build_artifact(sample_customers())
+        probabilities = artifact["model"].predict_proba(
+            sample_customers(2)[FEATURE_COLUMNS]
+        )
+
+        self.assertEqual(probabilities.shape, (2, 2))
+        self.assertEqual(artifact["model_type"], "LogisticRegression")
+        self.assertIn("0.40", artifact["threshold_metrics"])
+        self.assertNotIn("training_features", artifact)
 
 
 if __name__ == "__main__":

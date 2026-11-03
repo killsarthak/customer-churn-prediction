@@ -2,7 +2,7 @@
 
 Predicting which telecom customers are about to cancel their service ("churn"), so the business can step in **before** they leave. Keeping an existing customer is far cheaper than winning a new one, so even a rough early-warning model is genuinely valuable.
 
-The project now includes an interactive **Streamlit app** for portfolio exploration, individual and batch scoring, and model evaluation. Upload a labeled CSV to train; no customer dataset or serialized model is bundled.
+The project includes an interactive **Streamlit app** and a bundled logistic-regression model. It can score individual customers or CSV uploads immediately; upload a labeled dataset when you want to retrain the model and explore its portfolio-level evaluation. The serialized model contains the fitted pipeline and input metadata, not customer records.
 
 ---
 
@@ -93,7 +93,7 @@ From the odds ratios (>1 raises churn odds, <1 lowers them):
 - **Notebook decision threshold:** 0.40
 - **Notebook test result:** approximately 88% recall (327 of 373 churners), trading some precision for that recall.
 
-These figures describe the notebook experiment. The Streamlit app fits preprocessing and a fresh model on the uploaded dataset and reports its own held-out test results; the saved notebook artifacts are not included or required.
+These figures describe the notebook experiment. The bundled `models/Model.pkl` is a separate logistic-regression pipeline trained from the Telco CSV, and the app also supports fitting and evaluating a fresh model on an uploaded dataset.
 
 ---
 
@@ -101,8 +101,7 @@ These figures describe the notebook experiment. The Streamlit app fits preproces
 
 ### Run the Streamlit app locally
 
-1. Download the Telco Customer Churn CSV from [Kaggle](https://www.kaggle.com/datasets/blastchar/telco-customer-churn).
-2. From the project folder, create an environment and install the app dependencies:
+1. From the project folder, create an environment and install the app dependencies:
    ```powershell
    py -m venv .venv
    .\.venv\Scripts\Activate.ps1
@@ -112,18 +111,28 @@ These figures describe the notebook experiment. The Streamlit app fits preproces
    ```powershell
    streamlit run app.py
    ```
-4. Upload the CSV in the app sidebar and select **Train / refresh model**.
+4. The bundled model is ready for single-customer and CSV scoring. To train and evaluate a new model from a labeled CSV, upload the Telco Customer Churn CSV in the sidebar and select **Train / refresh model**.
 
 The training CSV needs the Telco feature columns and a `Churn` label (`Yes`/`No`). `customerID` and `TotalCharges` are optional; neither is used as a model feature. Missing numeric values are median-imputed, missing categories are imputed as `Unknown`, and unknown categories at scoring time are handled safely. Preprocessing is fitted only on the training split. Uploads are processed in the app session and are not written to the project.
+
+### Regenerate the bundled model
+
+The original dataset is not included. Download it from [Kaggle](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) and save it as `data/raw/raw.csv`, then run:
+
+```powershell
+python src\train_model.py
+```
+
+The script saves `models/Model.pkl` and prints held-out test metrics. To use a CSV at another path, pass it as the first argument. The artifact includes the preprocessing pipeline, model, input choices, and metrics at supported thresholds; it does not include customer rows.
 
 ### Deploy to Streamlit Community Cloud
 
 1. Push this project to a GitHub repository that you can access from [Streamlit Community Cloud](https://share.streamlit.io/).
 2. In Streamlit Community Cloud, select **Create app**, choose the repository and branch, and set the app file to `app.py`.
 3. Deploy. The platform installs the pinned-range dependencies from `requirements.txt`.
-4. Open the deployed app and upload the labeled CSV in the sidebar to train a model.
+4. Open the deployed app to score customers with the bundled model, or upload a labeled CSV in the sidebar to train a fresh model.
 
-No secrets or cloud credentials are required. The app does not bundle customer data, so it starts with an upload prompt.
+No secrets or cloud credentials are required. The app does not bundle customer records.
 
 ### Run the notebook
 
@@ -148,6 +157,9 @@ python -m unittest discover -s tests -v
 ```
 customer_churn_prediction.ipynb   # the full annotated notebook
 app.py                            # interactive Streamlit app
+src/churn_model.py                # reusable preprocessing and logistic-regression pipeline
+src/train_model.py                # train and save models/Model.pkl
+models/Model.pkl                  # pre-trained pipeline and metadata
 requirements.txt                  # app runtime dependencies
 tests/test_app.py                 # focused app/model tests
 README.md

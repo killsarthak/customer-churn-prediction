@@ -2,48 +2,29 @@ from __future__ import annotations
 
 import hashlib
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
+from sklearn.metrics import confusion_matrix
+
+from src.churn_model import (
+    CATEGORICAL_FEATURES,
+    FEATURE_COLUMNS,
+    NUMERIC_FEATURES,
+    calculate_metrics,
+    clean_feature_frame as _clean_feature_frame,
+    prepare_training_data,
+    train_model,
 )
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
-NUMERIC_FEATURES = ["SeniorCitizen", "tenure", "MonthlyCharges"]
-CATEGORICAL_FEATURES = [
-    "gender",
-    "Partner",
-    "Dependents",
-    "PhoneService",
-    "MultipleLines",
-    "InternetService",
-    "OnlineSecurity",
-    "OnlineBackup",
-    "DeviceProtection",
-    "TechSupport",
-    "StreamingTV",
-    "StreamingMovies",
-    "Contract",
-    "PaperlessBilling",
-    "PaymentMethod",
-]
-FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+MODEL_PATH = Path(__file__).resolve().parent / "models" / "Model.pkl"
 DEFAULT_THRESHOLD = 0.40
 
 st.set_page_config(
@@ -99,138 +80,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-
-def _clean_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    missing = sorted(set(FEATURE_COLUMNS) - set(frame.columns))
-    if missing:
-        raise ValueError(f"CSV is missing required customer fields: {', '.join(missing)}")
-
-    features = frame.loc[:, FEATURE_COLUMNS].copy()
-    for column in NUMERIC_FEATURES:
-        features[column] = pd.to_numeric(features[column], errors="coerce")
-    features[NUMERIC_FEATURES] = features[NUMERIC_FEATURES].replace(
-        [np.inf, -np.inf], np.nan
-    )
-
-    for column in CATEGORICAL_FEATURES:
-        values = features[column].astype("string").str.strip()
-        values = values.replace(
-            {"No internet service": "No", "No phone service": "No"}
-        )
-        normalized = values.str.lower()
-        values = values.mask(normalized.eq("yes"), "Yes")
-        values = values.mask(normalized.eq("no"), "No")
-        values = values.mask(normalized.eq("male"), "Male")
-        values = values.mask(normalized.eq("female"), "Female")
-        features[column] = values
-
-    return features
-
-
-def prepare_training_data(
-    frame: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, int]:
-    if "Churn" not in frame.columns:
-        raise ValueError("Training CSV must include a 'Churn' column with Yes/No labels.")
-
-    labels = (
-        frame["Churn"]
-        .astype("string")
-        .str.strip()
-        .str.lower()
-        .map({"yes": 1, "no": 0, "1": 1, "0": 0})
-    )
-    valid_rows = labels.notna()
-    dropped_rows = int((~valid_rows).sum())
-    if not valid_rows.any():
-        raise ValueError("No usable Churn labels found. Labels must be Yes or No.")
-
-    features = _clean_feature_frame(frame.loc[valid_rows]).reset_index(drop=True)
-    target = labels.loc[valid_rows].astype(int).reset_index(drop=True)
-    labeled_data = features.copy()
-    labeled_data["Churn"] = target
-    return features, target, labeled_data, dropped_rows
-
-
-def train_model(frame: pd.DataFrame) -> dict[str, Any]:
-    features, target, labeled_data, dropped_rows = prepare_training_data(frame)
-    class_counts = target.value_counts()
-    if len(class_counts) != 2:
-        raise ValueError("Training data must include both churn and non-churn customers.")
-    if int(class_counts.min()) < 5:
-        raise ValueError("Please provide at least 5 labeled examples in each Churn class.")
-
-    x_train, x_test, y_train, y_test = train_test_split(
-        features,
-        target,
-        test_size=0.20,
-        random_state=42,
-        stratify=target,
-    )
-
-    numeric_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    categorical_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="constant", fill_value="Unknown")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
-    preprocessing = ColumnTransformer(
-        transformers=[
-            ("numeric", numeric_pipeline, NUMERIC_FEATURES),
-            ("categorical", categorical_pipeline, CATEGORICAL_FEATURES),
-        ]
-    )
-    model = Pipeline(
-        steps=[
-            ("preprocessing", preprocessing),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=2000,
-                    class_weight="balanced",
-                    random_state=42,
-                ),
-            ),
-        ]
-    )
-    model.fit(x_train, y_train)
-    probabilities = model.predict_proba(x_test)[:, 1]
-
-    return {
-        "model": model,
-        "x_test": x_test.reset_index(drop=True),
-        "y_test": y_test.reset_index(drop=True),
-        "probabilities": probabilities,
-        "training_features": features,
-        "labeled_data": labeled_data,
-        "dropped_rows": dropped_rows,
-        "row_count": len(features),
-        "churn_rate": float(target.mean()),
-        "roc_auc": float(roc_auc_score(y_test, probabilities)),
-    }
-
-
-def calculate_metrics(
-    labels: pd.Series | np.ndarray,
-    probabilities: np.ndarray,
-    threshold: float,
-) -> dict[str, float | int]:
-    predictions = (probabilities >= threshold).astype(int)
-    return {
-        "accuracy": float(accuracy_score(labels, predictions)),
-        "precision": float(precision_score(labels, predictions, zero_division=0)),
-        "recall": float(recall_score(labels, predictions, zero_division=0)),
-        "f1": float(f1_score(labels, predictions, zero_division=0)),
-        "roc_auc": float(roc_auc_score(labels, probabilities)),
-        "flagged": int(predictions.sum()),
-    }
 
 
 def _style_chart(figure: go.Figure, height: int = 340) -> go.Figure:
@@ -517,6 +366,109 @@ def _render_bulk_scoring(bundle: dict[str, Any], threshold: float) -> None:
     )
 
 
+@st.cache_resource
+def _load_model_artifact(path: str) -> dict[str, Any]:
+    return joblib.load(path)
+
+
+def _render_saved_model(artifact: dict[str, Any]) -> None:
+    default_metrics = artifact["threshold_metrics"][f"{artifact['threshold']:.2f}"]
+    st.sidebar.success(
+        f"Saved model ready · {artifact['training_rows']:,} training customers"
+    )
+    st.sidebar.metric("Test ROC-AUC", f"{default_metrics['roc_auc']:.3f}")
+    threshold = st.sidebar.slider(
+        "Churn alert threshold",
+        min_value=0.10,
+        max_value=0.90,
+        value=float(artifact["threshold"]),
+        step=0.05,
+        help="Lower thresholds flag more customers and usually increase recall.",
+    )
+    metrics = artifact["threshold_metrics"][f"{threshold:.2f}"]
+
+    tabs = st.tabs(["Score a customer", "Bulk scoring", "Model performance", "Insights"])
+    with tabs[0]:
+        st.subheader("Score one customer")
+        st.caption("Enter the customer’s current account and service details.")
+        customer: dict[str, Any] = {}
+        columns = st.columns(2)
+        with st.form("saved_model_customer_form"):
+            for index, field in enumerate(artifact["feature_columns"]):
+                with columns[index % 2]:
+                    if field in artifact["categorical_columns"]:
+                        options = artifact["categorical_options"][field] or ["Unknown"]
+                        customer[field] = st.selectbox(field, options=options)
+                    elif field == "SeniorCitizen":
+                        customer[field] = st.selectbox(
+                            "Senior citizen",
+                            options=[0, 1],
+                            format_func=lambda value: "Yes" if value else "No",
+                        )
+                    elif field == "tenure":
+                        customer[field] = st.number_input(
+                            "Tenure (months)",
+                            min_value=0,
+                            max_value=1000,
+                            value=int(round(artifact["numeric_defaults"][field])),
+                            step=1,
+                        )
+                    else:
+                        customer[field] = st.number_input(
+                            "Monthly charges",
+                            min_value=0.0,
+                            max_value=10000.0,
+                            value=float(artifact["numeric_defaults"][field]),
+                            step=1.0,
+                        )
+            submitted = st.form_submit_button(
+                "Estimate churn risk",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if submitted:
+            customer_frame = _clean_feature_frame(pd.DataFrame([customer]))
+            probability = float(
+                artifact["model"].predict_proba(customer_frame)[0, 1]
+            )
+            result_columns = st.columns([1, 2])
+            result_columns[0].metric("Estimated churn probability", f"{probability:.1%}")
+            if probability >= threshold:
+                result_columns[1].error(
+                    "Above the current alert threshold. Consider a timely, relevant retention conversation."
+                )
+            else:
+                result_columns[1].success(
+                    "Below the current alert threshold. Continue standard customer care."
+                )
+            st.caption(
+                "This is a model estimate, not a certainty or a causal explanation. "
+                "Use it alongside customer context."
+            )
+
+    with tabs[1]:
+        _render_bulk_scoring({"model": artifact["model"]}, threshold)
+    with tabs[2]:
+        st.subheader("Held-out model performance")
+        st.caption(
+            f"Logistic Regression · threshold {threshold:.2f} · "
+            f"{metrics['test_rows']:,} test customers"
+        )
+        metric_columns = st.columns(4)
+        metric_columns[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
+        metric_columns[1].metric("Precision", f"{metrics['precision']:.1%}")
+        metric_columns[2].metric("Recall", f"{metrics['recall']:.1%}")
+        metric_columns[3].metric("F1 score", f"{metrics['f1']:.3f}")
+        st.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+        st.caption(
+            "The saved model and preprocessing pipeline were fit on the training "
+            "split only; these metrics use the held-out test split."
+        )
+    with tabs[3]:
+        _render_model_insights({"model": artifact["model"]})
+
+
 def _render_model_insights(bundle: dict[str, Any]) -> None:
     st.subheader("What the model learned")
     st.caption(
@@ -579,8 +531,8 @@ def _render_empty_state() -> None:
         )
     with right:
         st.info(
-            "No dataset or pre-trained model is bundled with this project. "
-            "Upload a labeled CSV in the sidebar to train the model. "
+            "No saved model was found. Upload a labeled CSV in the sidebar to train "
+            "the model. "
             "The `customerID` and `TotalCharges` columns are optional and are not "
             "used as model features."
         )
@@ -634,7 +586,10 @@ def main() -> None:
 
     bundle = st.session_state.get("model_bundle")
     if bundle is None:
-        _render_empty_state()
+        if MODEL_PATH.is_file():
+            _render_saved_model(_load_model_artifact(str(MODEL_PATH)))
+        else:
+            _render_empty_state()
         return
 
     st.sidebar.success(

@@ -4,6 +4,7 @@ __pycache__/
 .streamlit/secrets.toml
 *.py[cod]
 *.pkl
+!models/Model.pkl
 *.joblib
 customer_churn.csv
 churn_risk_scores.csv
